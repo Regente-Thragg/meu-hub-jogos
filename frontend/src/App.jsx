@@ -1,13 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { socket } from './services/socket';
-import AdivinhaGame from './games/adivinha/AdivinhaGame';
+import { JOGOS } from './games/catalogo';
 import ToastContainer from './components/Toast';
+import MenuJogos from './components/MenuJogos';
 
 export default function App() {
   const [conectado, setConectado] = useState(socket.connected);
   const [codigoSala, setCodigoSala] = useState('');
   const [inputSala, setInputSala] = useState('');
   const [emJogo, setEmJogo] = useState(false);
+  const [jogoAtual, setJogoAtual] = useState(''); // id do jogo (veja src/games/catalogo.js)
   const [totalJogadores, setTotalJogadores] = useState(1);
   const [lider, setLider] = useState('');
   const [toasts, setToasts] = useState([]);
@@ -27,26 +29,32 @@ export default function App() {
   }, [removerToast]);
 
   useEffect(() => {
-    socket.on('connect', () => setConectado(true));
-    socket.on('disconnect', () => setConectado(false));
+    const aoConectar = () => setConectado(true);
+    const aoDesconectar = () => setConectado(false);
+    socket.on('connect', aoConectar);
+    socket.on('disconnect', aoDesconectar);
+    // O socket pode ter conectado ANTES deste efeito rodar; sincroniza o estado atual
+    setConectado(socket.connected);
 
     // Admin: sala criada
-    socket.on('sala-criada', ({ codigoSala, lider, totalJogadores }) => {
+    socket.on('sala-criada', ({ codigoSala, lider, totalJogadores, jogo }) => {
       const total = totalJogadores ?? 1;
       totalRef.current = total;
       setCodigoSala(codigoSala);
       setLider(lider);
       setTotalJogadores(total);
+      if (jogo) setJogoAtual(jogo);
       setEmJogo(true);
       notificar(`Sala ${codigoSala} criada! Compartilhe o código.`, 'sucesso');
     });
 
     // Participante: servidor confirmou a entrada
-    socket.on('sala-entrada', ({ codigoSala, lider, totalJogadores }) => {
+    socket.on('sala-entrada', ({ codigoSala, lider, totalJogadores, jogo }) => {
       totalRef.current = totalJogadores;
       setCodigoSala(codigoSala);
       setLider(lider);
       setTotalJogadores(totalJogadores);
+      if (jogo) setJogoAtual(jogo);
       setEmJogo(true);
       notificar('Você entrou na sala!', 'sucesso');
     });
@@ -54,8 +62,8 @@ export default function App() {
     // Contagem e líder atualizados (para todos na sala)
     socket.on('atualizar-sala', ({ totalJogadores, lider }) => {
       if (totalJogadores !== undefined) {
-        if (totalJogadores > totalRef.current) notificar('O participante entrou na sala!', 'sucesso');
-        if (totalJogadores < totalRef.current) notificar('O participante saiu da sala.', 'info');
+        if (totalJogadores > totalRef.current) notificar('Novo participante entrou na sala!', 'sucesso');
+        if (totalJogadores < totalRef.current) notificar('Um participante saiu da sala.', 'info');
         totalRef.current = totalJogadores;
         setTotalJogadores(totalJogadores);
       }
@@ -71,6 +79,7 @@ export default function App() {
       setEmJogo(false);
       setCodigoSala('');
       setLider('');
+      setJogoAtual('');
       totalRef.current = 1;
       notificar('O admin saiu e a sala foi encerrada.', 'info');
     });
@@ -80,8 +89,8 @@ export default function App() {
     });
 
     return () => {
-      socket.off('connect');
-      socket.off('disconnect');
+      socket.off('connect', aoConectar);
+      socket.off('disconnect', aoDesconectar);
       socket.off('sala-criada');
       socket.off('sala-entrada');
       socket.off('atualizar-sala');
@@ -91,9 +100,9 @@ export default function App() {
     };
   }, [notificar]);
 
-  const criarSala = () => {
+  const criarSala = (idJogo) => {
     const codigo = Math.random().toString(36).substring(2, 6).toUpperCase();
-    socket.emit('criar-sala', { codigoSala: codigo, jogo: 'adivinha' });
+    socket.emit('criar-sala', { codigoSala: codigo, jogo: idJogo });
   };
 
   const entrarSala = (e) => {
@@ -108,16 +117,19 @@ export default function App() {
     setEmJogo(false);
     setCodigoSala('');
     setLider('');
+    setJogoAtual('');
     setTotalJogadores(1);
     totalRef.current = 1;
   };
+
+  const JogoAtual = JOGOS.find((j) => j.id === jogoAtual)?.Componente;
 
   return (
     <>
       <ToastContainer toasts={toasts} remover={removerToast} />
 
-      {emJogo ? (
-        <AdivinhaGame
+      {emJogo && JogoAtual ? (
+        <JogoAtual
           socket={socket}
           codigoSala={codigoSala}
           voltarHome={voltarHome}
@@ -125,49 +137,13 @@ export default function App() {
           lider={lider}
         />
       ) : (
-        <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-4">
-          <div className="bg-slate-800 p-8 rounded-2xl shadow-xl max-w-md w-full text-center border border-slate-700">
-            <h1 className="text-3xl font-bold mb-2 text-emerald-400">Hub de Jogos Clássicos</h1>
-            <p className="text-slate-400 text-sm mb-6">Relembre os clássicos do recreio online!</p>
-
-            <div className="flex items-center justify-center gap-2 mb-6">
-              <span className={`w-3 h-3 rounded-full ${conectado ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`}></span>
-              <span className="text-sm text-slate-300">
-                {conectado ? 'Conectado ao Servidor' : 'Desconectado'}
-              </span>
-            </div>
-
-            <button
-              onClick={criarSala}
-              className="w-full bg-emerald-600 hover:bg-emerald-500 transition font-semibold py-3 rounded-xl shadow-lg mb-6 cursor-pointer"
-            >
-              Criar Nova Sala (Adivinha)
-            </button>
-
-            <div className="relative flex py-2 items-center mb-6">
-              <div className="flex-grow border-t border-slate-700"></div>
-              <span className="flex-shrink mx-4 text-slate-500 text-sm">ou entrar em uma sala</span>
-              <div className="flex-grow border-t border-slate-700"></div>
-            </div>
-
-            <form onSubmit={entrarSala} className="flex gap-2">
-              <input
-                type="text"
-                placeholder="Código da Sala"
-                value={inputSala}
-                onChange={(e) => setInputSala(e.target.value)}
-                className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-white uppercase focus:outline-none focus:border-emerald-500 font-mono"
-                maxLength={4}
-              />
-              <button
-                type="submit"
-                className="bg-indigo-600 hover:bg-indigo-500 transition px-6 py-2 rounded-xl font-semibold cursor-pointer shadow"
-              >
-                Entrar
-              </button>
-            </form>
-          </div>
-        </div>
+        <MenuJogos
+          conectado={conectado}
+          aoCriarSala={criarSala}
+          inputSala={inputSala}
+          setInputSala={setInputSala}
+          aoEntrarSala={entrarSala}
+        />
       )}
     </>
   );
